@@ -1,0 +1,139 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Mein Handy-Standort</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;600&display=swap">
+<style>
+/* Layout: eine Karte, oben Status/Knopf, darunter Koordinatenfelder als Raster, unten Kartenlink */
+:root {
+  --bg: #eef2f5; --surface: #ffffff; --fg: #17222c; --muted: #5a6b7a;
+  --line: #d5dee6; --accent: #1f6f8b; --warn: #a3471b; --ok: #1e7d4f;
+  --sans: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Consolas, monospace;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0f161c; --surface: #17212a; --fg: #e3ebf1; --muted: #93a4b3;
+    --line: #2a3945; --accent: #5cb6d4; --warn: #e88a5c; --ok: #5cc48c; color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0f161c; --surface: #17212a; --fg: #e3ebf1; --muted: #93a4b3;
+  --line: #2a3945; --accent: #5cb6d4; --warn: #e88a5c; --ok: #5cc48c; color-scheme: dark;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0; background: var(--bg); color: var(--fg); font: 15px/1.5 var(--sans);
+  padding-block: 40px;
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+}
+main { max-width: 560px; margin: 0 auto; display: grid; gap: 20px; }
+h1 { font-size: 1.35rem; font-weight: 600; margin: 0; text-wrap: balance; }
+.lead { margin: 0; color: var(--muted); }
+.card {
+  background: var(--surface); border: 1px solid var(--line); border-radius: 10px;
+  padding: 24px; display: grid; gap: 20px;
+}
+.label { font-size: .72rem; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); }
+.coord { font: 500 clamp(1.3rem, 5vw, 1.8rem)/1.2 var(--mono); color: var(--accent); }
+dl { margin: 0; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px 24px; }
+dl div { min-width: 0; }
+dd { margin: 2px 0 0; font-weight: 600; overflow-wrap: anywhere; }
+dd.mono { font: 500 .95rem var(--mono); font-variant-numeric: tabular-nums; }
+.actions { display: flex; flex-wrap: wrap; gap: 10px; }
+a.btn, button {
+  font: 600 .9rem var(--sans); padding: 9px 14px; border-radius: 8px; cursor: pointer;
+  border: 1px solid var(--accent); background: transparent; color: var(--accent); text-decoration: none;
+}
+a.btn.primary, button.primary { background: var(--accent); color: var(--surface); border-color: var(--accent); }
+a.btn:focus-visible, button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.status { font-size: .9rem; color: var(--muted); }
+.status.err { color: var(--warn); }
+.status.ok { color: var(--ok); }
+.dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--muted); margin-right: 6px; vertical-align: middle; }
+.live .dot { background: var(--ok); }
+.note { font-size: .82rem; color: var(--muted); margin: 0; }
+@media (max-width: 420px) { dl { grid-template-columns: minmax(0, 1fr); } }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>Mein Handy-Standort</h1>
+    <p class="lead">Öffne diese Seite auf dem Handy und erlaube den Standortzugriff. Der genaue Ort wird dann hier angezeigt und laufend aktualisiert.</p>
+  </header>
+
+  <section class="card" id="card" aria-live="polite">
+    <div class="actions">
+      <button type="button" class="primary" id="start">Standort anzeigen</button>
+      <a class="btn" id="map" href="#" target="_blank" rel="noopener" hidden>Auf Karte zeigen</a>
+    </div>
+    <dl>
+      <div><dt class="label">Breitengrad</dt><dd class="mono coord" id="lat">–</dd></div>
+      <div><dt class="label">Längengrad</dt><dd class="mono coord" id="lon">–</dd></div>
+      <div><dt class="label">Genauigkeit</dt><dd class="mono" id="acc">–</dd></div>
+      <div><dt class="label">Höhe</dt><dd class="mono" id="alt">–</dd></div>
+      <div><dt class="label">Tempo</dt><dd class="mono" id="spd">–</dd></div>
+      <div><dt class="label">Aktualisiert</dt><dd class="mono" id="time">–</dd></div>
+    </dl>
+    <div class="status" id="status"><span class="dot"></span>Noch nicht gestartet.</div>
+  </section>
+
+  <p class="note">GPS ist auf wenige Meter genau und nutzt nur dein Gerät; der Standort verlässt diese Seite nicht und wird nirgends gespeichert oder gesendet. „Genauigkeit“ ist der geschätzte Fehlerradius. Drinnen oder ohne klare Sicht zum Himmel kann der erste Wert ungenau sein und sich nach kurzer Zeit verbessern.</p>
+</main>
+
+<script>
+const $ = id => document.getElementById(id);
+let watchId = null;
+
+function fmt(n, d) { return Number.isFinite(n) ? n.toFixed(d) : null; }
+
+function update(pos) {
+  const c = pos.coords;
+  $("lat").textContent = fmt(c.latitude, 6) + "°";
+  $("lon").textContent = fmt(c.longitude, 6) + "°";
+  $("acc").textContent = Number.isFinite(c.accuracy) ? "±" + Math.round(c.accuracy) + " m" : "–";
+  $("alt").textContent = Number.isFinite(c.altitude) ? Math.round(c.altitude) + " m" : "–";
+  $("spd").textContent = Number.isFinite(c.speed) ? (c.speed * 3.6).toFixed(1) + " km/h" : "–";
+  $("time").textContent = new Date(pos.timestamp).toLocaleTimeString("de-DE");
+  $("map").href = `https://www.openstreetmap.org/?mlat=${c.latitude}&mlon=${c.longitude}#map=17/${c.latitude}/${c.longitude}`;
+  $("map").hidden = false;
+  $("card").classList.add("live");
+  $("status").className = "status ok";
+  $("status").innerHTML = '<span class="dot"></span>Live – wird aktualisiert.';
+}
+
+function fail(err) {
+  $("card").classList.remove("live");
+  $("status").className = "status err";
+  const msg = {
+    1: "Zugriff abgelehnt. Erlaube den Standort in den Browser-Einstellungen für diese Seite und starte erneut.",
+    2: "Position nicht ermittelbar. Prüfe, ob GPS/Ortung am Gerät eingeschaltet ist.",
+    3: "Zeitüberschreitung. Versuche es im Freien noch einmal."
+  }[err.code] || "Unbekannter Fehler.";
+  $("status").innerHTML = '<span class="dot"></span>' + msg;
+}
+
+function start() {
+  if (!("geolocation" in navigator)) {
+    fail({ code: 0 });
+    $("status").textContent = "Dieser Browser unterstützt keine Standortbestimmung.";
+    return;
+  }
+  $("status").className = "status";
+  $("status").innerHTML = '<span class="dot"></span>Standort wird ermittelt …';
+  if (watchId !== null) navigator.geolocation.clearWatch(watchId);
+  watchId = navigator.geolocation.watchPosition(update, fail, {
+    enableHighAccuracy: true, maximumAge: 0, timeout: 20000
+  });
+}
+
+$("start").addEventListener("click", start);
+</script>
+</body>
+</html>

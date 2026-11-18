@@ -1,0 +1,211 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Live-Standort Handy → Laptop</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;600&display=swap">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+<style>
+/* Layout: Rollenwahl oben, dann je nach Rolle Sende- oder Empfangsansicht; Empfang mit Karte */
+:root {
+  --bg: #eef2f5; --surface: #ffffff; --fg: #17222c; --muted: #5a6b7a;
+  --line: #d5dee6; --accent: #1f6f8b; --warn: #a3471b; --ok: #1e7d4f;
+  --sans: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Consolas, monospace;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0f161c; --surface: #17212a; --fg: #e3ebf1; --muted: #93a4b3;
+    --line: #2a3945; --accent: #5cb6d4; --warn: #e88a5c; --ok: #5cc48c; color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0f161c; --surface: #17212a; --fg: #e3ebf1; --muted: #93a4b3;
+  --line: #2a3945; --accent: #5cb6d4; --warn: #e88a5c; --ok: #5cc48c; color-scheme: dark;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0; background: var(--bg); color: var(--fg); font: 15px/1.5 var(--sans);
+  padding-block: 32px;
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+}
+main { max-width: 620px; margin: 0 auto; display: grid; gap: 18px; }
+h1 { font-size: 1.3rem; font-weight: 600; margin: 0; text-wrap: balance; }
+.lead { margin: 0; color: var(--muted); }
+.card {
+  background: var(--surface); border: 1px solid var(--line); border-radius: 10px;
+  padding: 20px; display: grid; gap: 16px;
+}
+.label { font-size: .72rem; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); }
+.coord { font: 500 clamp(1.2rem, 4.5vw, 1.6rem)/1.2 var(--mono); color: var(--accent); }
+dl { margin: 0; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px 24px; }
+dl div { min-width: 0; }
+dd { margin: 2px 0 0; font-weight: 600; overflow-wrap: anywhere; }
+dd.mono { font: 500 .95rem var(--mono); font-variant-numeric: tabular-nums; }
+.actions { display: flex; flex-wrap: wrap; gap: 10px; }
+a.btn, button {
+  font: 600 .9rem var(--sans); padding: 10px 15px; border-radius: 8px; cursor: pointer;
+  border: 1px solid var(--accent); background: transparent; color: var(--accent); text-decoration: none;
+}
+a.btn.primary, button.primary { background: var(--accent); color: var(--surface); border-color: var(--accent); }
+a.btn:focus-visible, button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.status { font-size: .9rem; color: var(--muted); display: flex; align-items: center; gap: 8px; }
+.status.err { color: var(--warn); }
+.status.ok { color: var(--ok); }
+.dot { width: 9px; height: 9px; border-radius: 50%; background: var(--muted); flex: none; }
+.ok .dot { background: var(--ok); } .err .dot { background: var(--warn); }
+#map { height: 300px; border-radius: 8px; border: 1px solid var(--line); background: var(--bg); }
+.linkbox {
+  font: 500 .82rem var(--mono); background: var(--bg); border: 1px solid var(--line);
+  border-radius: 8px; padding: 10px 12px; word-break: break-all; color: var(--fg);
+}
+.note { font-size: .82rem; color: var(--muted); margin: 0; }
+@media (max-width: 440px) { dl { grid-template-columns: minmax(0, 1fr); } }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>Live-Standort: Handy → Laptop</h1>
+    <p class="lead">Öffne diesen Link auf dem Handy und wähle „Senden“. Öffne denselben Link auf dem Laptop und wähle „Empfangen“. Beide müssen denselben Link (mit dem Code am Ende) benutzen.</p>
+  </header>
+
+  <!-- Rollenwahl -->
+  <section class="card" id="choose">
+    <div class="actions">
+      <button type="button" class="primary" id="beSender">📱 Dieses Gerät sendet (Handy)</button>
+      <button type="button" id="beReceiver">💻 Dieses Gerät empfängt (Laptop)</button>
+    </div>
+    <div>
+      <div class="label">Gemeinsamer Link (auf beiden Geräten öffnen)</div>
+      <div class="linkbox" id="shareLink">…</div>
+    </div>
+    <div class="actions">
+      <button type="button" id="copyLink">Link kopieren</button>
+    </div>
+  </section>
+
+  <!-- Senden -->
+  <section class="card" id="sendView" hidden>
+    <div class="status" id="sendStatus"><span class="dot"></span>Bereit.</div>
+    <dl>
+      <div><dt class="label">Breitengrad</dt><dd class="mono coord" id="sLat">–</dd></div>
+      <div><dt class="label">Längengrad</dt><dd class="mono coord" id="sLon">–</dd></div>
+      <div><dt class="label">Genauigkeit</dt><dd class="mono" id="sAcc">–</dd></div>
+      <div><dt class="label">Gesendet</dt><dd class="mono" id="sTime">–</dd></div>
+    </dl>
+    <p class="note">Lass diese Seite auf dem Handy geöffnet und den Bildschirm an, damit weiter gesendet wird.</p>
+  </section>
+
+  <!-- Empfangen -->
+  <section class="card" id="recvView" hidden>
+    <div class="status" id="recvStatus"><span class="dot"></span>Warte auf Verbindung …</div>
+    <div id="map"></div>
+    <dl>
+      <div><dt class="label">Breitengrad</dt><dd class="mono coord" id="rLat">–</dd></div>
+      <div><dt class="label">Längengrad</dt><dd class="mono coord" id="rLon">–</dd></div>
+      <div><dt class="label">Genauigkeit</dt><dd class="mono" id="rAcc">–</dd></div>
+      <div><dt class="label">Zuletzt</dt><dd class="mono" id="rTime">–</dd></div>
+    </dl>
+    <div class="actions">
+      <a class="btn" id="osm" href="#" target="_blank" rel="noopener" hidden>In OpenStreetMap öffnen</a>
+    </div>
+  </section>
+
+  <p class="note">Die Übertragung läuft über einen kostenlosen öffentlichen Vermittlungsdienst (MQTT-Broker broker.emqx.io). Der Standort wird nicht dauerhaft gespeichert, läuft aber kurz über diesen fremden Dienst. Der Code im Link ist zufällig; gib den Link nicht weiter, sonst könnte jemand mit diesem Code deinen Standort mitlesen. Für dauerhaft privates Teilen eignet sich Google Maps Standortfreigabe besser.</p>
+</main>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/mqtt/4.3.7/mqtt.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<script>
+const $ = id => document.getElementById(id);
+const BROKER = "wss://broker.emqx.io:8084/mqtt";
+
+// Kanal-Code aus dem Link lesen oder neu erzeugen
+function randId() {
+  const a = new Uint8Array(8); crypto.getRandomValues(a);
+  return Array.from(a, b => b.toString(16).padStart(2, "0")).join("");
+}
+let channel = (location.hash || "").replace(/^#/, "");
+if (!/^[a-f0-9]{8,}$/.test(channel)) { channel = randId(); location.hash = channel; }
+const TOPIC = "handystandort/" + channel;
+$("shareLink").textContent = location.href;
+
+$("copyLink").addEventListener("click", async () => {
+  try { await navigator.clipboard.writeText(location.href); $("copyLink").textContent = "Kopiert ✓"; }
+  catch { const r = document.createRange(); r.selectNode($("shareLink")); getSelection().removeAllRanges(); getSelection().addRange(r); }
+  setTimeout(() => { $("copyLink").textContent = "Link kopieren"; }, 1500);
+});
+
+function connect(onConnect, onMessage, setStatus) {
+  const client = mqtt.connect(BROKER, { clientId: "hs_" + randId(), connectTimeout: 15000, reconnectPeriod: 4000 });
+  client.on("connect", () => { setStatus("ok", "Verbunden."); onConnect(client); });
+  client.on("reconnect", () => setStatus("", "Verbindung wird wiederhergestellt …"));
+  client.on("error", () => setStatus("err", "Verbindungsfehler. Prüfe das Internet; manche Netze blockieren den Dienst."));
+  client.on("close", () => setStatus("err", "Verbindung getrennt. Versuche erneut …"));
+  if (onMessage) client.on("message", onMessage);
+  return client;
+}
+function status(el, cls, text) { el.className = "status " + cls; el.innerHTML = '<span class="dot"></span>' + text; }
+
+// ---- Senden ----
+$("beSender").addEventListener("click", () => {
+  $("choose").hidden = true; $("sendView").hidden = false;
+  const st = (c, t) => status($("sendStatus"), c, t);
+  if (!("geolocation" in navigator)) { st("err", "Dieses Gerät kann keinen Standort bestimmen."); return; }
+  st("", "Verbinde …");
+  const client = connect((cl) => {
+    st("ok", "Verbunden – ermittle Standort …");
+    navigator.geolocation.watchPosition(pos => {
+      const c = pos.coords;
+      const payload = JSON.stringify({ lat: c.latitude, lon: c.longitude, acc: c.accuracy, t: pos.timestamp });
+      cl.publish(TOPIC, payload);
+      $("sLat").textContent = c.latitude.toFixed(6) + "°";
+      $("sLon").textContent = c.longitude.toFixed(6) + "°";
+      $("sAcc").textContent = "±" + Math.round(c.accuracy) + " m";
+      $("sTime").textContent = new Date(pos.timestamp).toLocaleTimeString("de-DE");
+      st("ok", "Live – Standort wird gesendet.");
+    }, err => {
+      const m = { 1: "Standort abgelehnt. Erlaube ihn für diese Seite und lade neu.", 2: "Position nicht ermittelbar. Ist die Ortung an?", 3: "Zeitüberschreitung – im Freien erneut versuchen." }[err.code] || "Standortfehler.";
+      st("err", m);
+    }, { enableHighAccuracy: true, maximumAge: 0, timeout: 20000 });
+  }, null, (c, t) => status($("sendStatus"), c, t));
+});
+
+// ---- Empfangen ----
+$("beReceiver").addEventListener("click", () => {
+  $("choose").hidden = true; $("recvView").hidden = false;
+  let map = null, marker = null, circle = null;
+  const st = (c, t) => status($("recvStatus"), c, t);
+  st("", "Verbinde …");
+  connect((cl) => {
+    cl.subscribe(TOPIC, () => st("ok", "Verbunden – warte auf Standort vom Handy …"));
+  }, (topic, msg) => {
+    let d; try { d = JSON.parse(msg.toString()); } catch { return; }
+    if (!Number.isFinite(d.lat) || !Number.isFinite(d.lon)) return;
+    $("rLat").textContent = d.lat.toFixed(6) + "°";
+    $("rLon").textContent = d.lon.toFixed(6) + "°";
+    $("rAcc").textContent = Number.isFinite(d.acc) ? "±" + Math.round(d.acc) + " m" : "–";
+    $("rTime").textContent = new Date(d.t || Date.now()).toLocaleTimeString("de-DE");
+    $("osm").href = `https://www.openstreetmap.org/?mlat=${d.lat}&mlon=${d.lon}#map=17/${d.lat}/${d.lon}`;
+    $("osm").hidden = false;
+    st("ok", "Live – Standort empfangen.");
+    if (!map) {
+      map = L.map("map").setView([d.lat, d.lon], 16);
+      L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", { maxZoom: 19, attribution: "© OpenStreetMap" }).addTo(map);
+      marker = L.marker([d.lat, d.lon]).addTo(map);
+      circle = L.circle([d.lat, d.lon], { radius: d.acc || 30, color: "#1f6f8b", fillOpacity: .12 }).addTo(map);
+    } else {
+      marker.setLatLng([d.lat, d.lon]);
+      circle.setLatLng([d.lat, d.lon]).setRadius(d.acc || 30);
+      map.panTo([d.lat, d.lon]);
+    }
+  }, (c, t) => status($("recvStatus"), c, t));
+});
+</script>
+</body>
+</html>

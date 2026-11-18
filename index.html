@@ -1,0 +1,150 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Mein IP-Standort</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;600&display=swap">
+<style>
+/* Layout: eine schmale Karte, oben die IP groß, darunter Standortfelder als Raster */
+:root {
+  --bg: #eef2f5; --surface: #ffffff; --fg: #17222c; --muted: #5a6b7a;
+  --line: #d5dee6; --accent: #1f6f8b; --warn: #a3471b;
+  --sans: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Consolas, monospace;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0f161c; --surface: #17212a; --fg: #e3ebf1; --muted: #93a4b3;
+    --line: #2a3945; --accent: #5cb6d4; --warn: #e88a5c; color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0f161c; --surface: #17212a; --fg: #e3ebf1; --muted: #93a4b3;
+  --line: #2a3945; --accent: #5cb6d4; --warn: #e88a5c; color-scheme: dark;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0; background: var(--bg); color: var(--fg); font: 15px/1.5 var(--sans);
+  padding-block: 40px;
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+}
+main { max-width: 560px; margin: 0 auto; display: grid; gap: 20px; }
+h1 { font-size: 1.35rem; font-weight: 600; margin: 0; text-wrap: balance; }
+.lead { margin: 0; color: var(--muted); }
+.card {
+  background: var(--surface); border: 1px solid var(--line); border-radius: 10px;
+  padding: 24px; display: grid; gap: 20px;
+}
+.label { font-size: .72rem; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); }
+.ip { font: 500 clamp(1.4rem, 6vw, 2rem)/1.2 var(--mono); color: var(--accent); word-break: break-all; }
+dl { margin: 0; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px 24px; }
+dl div { min-width: 0; }
+dd { margin: 2px 0 0; font-weight: 600; overflow-wrap: anywhere; }
+dd.mono { font: 500 .95rem var(--mono); font-variant-numeric: tabular-nums; }
+.actions { display: flex; flex-wrap: wrap; gap: 10px; }
+a.btn, button {
+  font: 600 .9rem var(--sans); padding: 9px 14px; border-radius: 8px; cursor: pointer;
+  border: 1px solid var(--accent); background: transparent; color: var(--accent); text-decoration: none;
+}
+a.btn.primary { background: var(--accent); color: var(--surface); }
+a.btn:focus-visible, button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.status { font-size: .9rem; color: var(--muted); }
+.status.err { color: var(--warn); }
+.note { font-size: .82rem; color: var(--muted); margin: 0; }
+@media (max-width: 420px) { dl { grid-template-columns: minmax(0, 1fr); } }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>Mein IP-Standort</h1>
+    <p class="lead">Diese Seite zeigt deine öffentliche IP-Adresse und den daraus geschätzten Standort.</p>
+  </header>
+
+  <section class="card" aria-live="polite">
+    <div>
+      <div class="label">Öffentliche IP-Adresse</div>
+      <div class="ip" id="ip">wird ermittelt …</div>
+    </div>
+    <dl>
+      <div><dt class="label">Stadt</dt><dd id="city">–</dd></div>
+      <div><dt class="label">Region</dt><dd id="region">–</dd></div>
+      <div><dt class="label">Land</dt><dd id="country">–</dd></div>
+      <div><dt class="label">Anbieter</dt><dd id="isp">–</dd></div>
+      <div><dt class="label">Breitengrad</dt><dd class="mono" id="lat">–</dd></div>
+      <div><dt class="label">Längengrad</dt><dd class="mono" id="lon">–</dd></div>
+    </dl>
+    <div class="actions">
+      <a class="btn primary" id="map" href="#" target="_blank" rel="noopener" hidden>Auf Karte zeigen</a>
+      <button type="button" id="reload">Neu abfragen</button>
+    </div>
+    <div class="status" id="status"></div>
+  </section>
+
+  <p class="note">Der Standort einer IP ist nur eine Schätzung, meist auf Stadt- oder Regionsebene; bei VPN oder Mobilfunk kann er deutlich abweichen. Die Abfrage läuft direkt aus deinem Browser zu ipwho.is bzw. ipapi.co. Diese Seite speichert nichts und sendet nichts an Dritte weiter.</p>
+</main>
+
+<script>
+const $ = id => document.getElementById(id);
+
+// Mehrere kostenlose APIs ohne Schlüssel, mit Fallback
+const providers = [
+  { url: "https://ipwho.is/?lang=de", map: d => {
+      if (d.success === false) throw new Error(d.message || "Fehler");
+      return { ip: d.ip, city: d.city, region: d.region, country: d.country,
+               lat: d.latitude, lon: d.longitude, isp: d.connection && (d.connection.isp || d.connection.org) };
+  }},
+  { url: "https://ipapi.co/json/", map: d => {
+      if (d.error) throw new Error(d.reason || "Fehler");
+      return { ip: d.ip, city: d.city, region: d.region, country: d.country_name,
+               lat: d.latitude, lon: d.longitude, isp: d.org };
+  }},
+  { url: "https://get.geojs.io/v1/ip/geo.json", map: d => ({
+      ip: d.ip, city: d.city, region: d.region, country: d.country,
+      lat: parseFloat(d.latitude), lon: parseFloat(d.longitude), isp: d.organization_name
+  })}
+];
+
+function show(r, source) {
+  $("ip").textContent = r.ip || "unbekannt";
+  $("city").textContent = r.city || "unbekannt";
+  $("region").textContent = r.region || "unbekannt";
+  $("country").textContent = r.country || "unbekannt";
+  $("isp").textContent = r.isp || "unbekannt";
+  const ok = Number.isFinite(r.lat) && Number.isFinite(r.lon);
+  $("lat").textContent = ok ? r.lat.toFixed(4) + "°" : "–";
+  $("lon").textContent = ok ? r.lon.toFixed(4) + "°" : "–";
+  if (ok) {
+    $("map").href = `https://www.openstreetmap.org/?mlat=${r.lat}&mlon=${r.lon}#map=11/${r.lat}/${r.lon}`;
+    $("map").hidden = false;
+  }
+  $("status").className = "status";
+  $("status").textContent = "Quelle: " + source;
+}
+
+async function lookup() {
+  $("status").className = "status";
+  $("status").textContent = "Frage Standortdienst ab …";
+  $("map").hidden = true;
+  for (const p of providers) {
+    try {
+      const res = await fetch(p.url, { cache: "no-store" });
+      if (!res.ok) throw new Error("HTTP " + res.status);
+      show(p.map(await res.json()), new URL(p.url).hostname);
+      return;
+    } catch (e) { /* nächsten Anbieter versuchen */ }
+  }
+  $("ip").textContent = "nicht ermittelbar";
+  $("status").className = "status err";
+  $("status").textContent = "Kein Standortdienst erreichbar. Prüfe die Internetverbindung oder ob ein Werbeblocker die Abfrage blockiert, und frage dann neu ab.";
+}
+
+$("reload").addEventListener("click", lookup);
+lookup();
+</script>
+</body>
+</html>
